@@ -11305,6 +11305,9 @@ def _run_agent_streaming(
                 )
                 _run_conversation_kwargs["user_message"] = user_message
             _result_partial_pre_call_context = list(_previous_context_messages)
+            from types import SimpleNamespace
+            from hermes_cli.plugins import get_plugin_manager
+            get_plugin_manager()._cli_ref = SimpleNamespace(agent=agent)
             result = agent.run_conversation(**_run_conversation_kwargs)
             _remember_pending_steer_result(result)
             _active_turn_identity = _resolve_active_turn_authority(
