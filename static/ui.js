@@ -7785,6 +7785,12 @@ function renderMd(raw){
   // false positives on currency like "$1,000 xuống ~$95" or "costs $5 and $10".
   // Aligns with smd's se() guard which also rejects $ followed by digits.
   s=s.replace(/\$([^\s$\d\n][^$\n]*?[^\s$\n]|[^\s\d])\$/g,(_,m)=>{if(m.includes(' | '))return '\$'+m+'\$';math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  // Digit-leading arithmetic is math, not currency. Keep plain $5 and $1,000 inert.
+  s=s.replace(/\$(\d[^$\n]*?(?:\s(?:[+\-*/=]|\\times|\\div)\s|\\frac)[^$\n]*?)\$/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  // A closed $...$ holding only a bare number (optional decimal or ^{...}
+  // exponent) is math too — tutors write plain numbers this way ($550$).
+  // Unclosed currency ("it costs $5") never matches, so it stays inert.
+  s=s.replace(/\$(\d+(?:\.\d+)?(?:\^\{[^{}]*\})?)\$/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
   // Also stash \(...\) LaTeX delimiters.
   // Match a single literal backslash before the delimiter (the common LLM form).
   s=s.replace(/\\\((.+?)\\\)/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
