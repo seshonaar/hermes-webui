@@ -5892,7 +5892,10 @@ def _match_extension_sidecar_proxy_path(path: str) -> tuple[str, str] | None:
     return match.group("extension_id"), match.group("proxy_path") or ""
 
 
-def _read_body_bytes(handler) -> bytes:
+def _read_body_bytes(
+    handler,
+    max_bytes: int = MAX_BODY_BYTES,
+) -> bytes:
     raw_length = handler.headers.get("Content-Length", 0)
     try:
         length = int(raw_length)
@@ -5908,12 +5911,12 @@ def _read_body_bytes(handler) -> bytes:
         except Exception:
             pass
         raise ValueError(f"Invalid Content-Length: {length}")
-    if length > MAX_BODY_BYTES:
+    if length > max_bytes:
         try:
             handler.close_connection = True
         except Exception:
             pass
-        raise ValueError(f"Request body too large ({length} bytes, max {MAX_BODY_BYTES})")
+        raise ValueError(f"Request body too large ({length} bytes, max {max_bytes})")
     return handler.rfile.read(length) if length else b""
 
 
@@ -5962,9 +5965,12 @@ def _send_extension_sidecar_proxy_response(handler, status: int, body: bytes, he
     return True
 
 
-def _read_extension_sidecar_proxy_body(stream) -> bytes:
-    body = stream.read(_EXTENSION_SIDECAR_PROXY_MAX_RESPONSE_BYTES + 1)
-    if len(body) > _EXTENSION_SIDECAR_PROXY_MAX_RESPONSE_BYTES:
+def _read_extension_sidecar_proxy_body(
+    stream,
+    max_bytes: int = _EXTENSION_SIDECAR_PROXY_MAX_RESPONSE_BYTES,
+) -> bytes:
+    body = stream.read(max_bytes + 1)
+    if len(body) > max_bytes:
         raise ValueError("Extension sidecar response too large")
     return body
 
@@ -6027,8 +6033,14 @@ def _handle_extension_sidecar_proxy(
     # non-browser clients, giving unsafe methods weaker provenance than GET.
     if not _check_same_origin_browser_request(handler, require_provenance=True):
         return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
+    max_request_bytes = MAX_BODY_BYTES
+    extension_id, proxy_path = matched
+    if extension_id == "hermes-camera" and method == "POST" and proxy_path == "v1/captures":
+        max_request_bytes = 20 * 1024 * 1024
     try:
-        request_body = _read_body_bytes(handler) if read_request_body else None
+        request_body = (
+            _read_body_bytes(handler, max_request_bytes) if read_request_body else None
+        )
     except ValueError as exc:
         status = 413 if "too large" in str(exc).lower() else 400
         return bad(handler, str(exc), status=status)
@@ -6036,6 +6048,7 @@ def _handle_extension_sidecar_proxy(
         ExtensionSidecarProxyError,
         resolve_extension_sidecar_proxy_target,
     )
+    from api.miss_maple_learners import LearnerSelectionError, require_learner_id
 
     extension_id, proxy_path = matched
     try:
@@ -6051,6 +6064,8 @@ def _handle_extension_sidecar_proxy(
         _auth_token = target.get("auth_token")
         if _auth_token:
             proxied_headers["X-Hermes-Sidecar-Token"] = _auth_token
+        if extension_id == "hermes-camera":
+            proxied_headers["X-Hermes-Learner-ID"] = require_learner_id(handler)
         request = Request(
             target["upstream_url"],
             data=request_body,
@@ -6059,7 +6074,14 @@ def _handle_extension_sidecar_proxy(
         )
         opener = _extension_sidecar_proxy_same_origin_opener(target["origin"])
         with opener.open(request, timeout=10) as response:
-            body = _read_extension_sidecar_proxy_body(response)
+            max_response_bytes = _EXTENSION_SIDECAR_PROXY_MAX_RESPONSE_BYTES
+            if (
+                extension_id == "hermes-camera"
+                and method == "GET"
+                and _re.fullmatch(r"v1/pages/[^/]+/image", proxy_path)
+            ):
+                max_response_bytes = 5 * 1024 * 1024
+            body = _read_extension_sidecar_proxy_body(response, max_response_bytes)
             return _send_extension_sidecar_proxy_response(
                 handler,
                 getattr(response, "status", 200),
@@ -6067,6 +6089,8 @@ def _handle_extension_sidecar_proxy(
                 response.headers,
             )
     except ExtensionSidecarProxyError as exc:
+        return bad(handler, str(exc), status=exc.status)
+    except LearnerSelectionError as exc:
         return bad(handler, str(exc), status=exc.status)
     except ValueError as exc:
         return bad(handler, str(exc), status=502)
@@ -13559,6 +13583,12 @@ def _handle_session_get(handler, parsed) -> bool:
 
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
+    if parsed.path == "/api/extensions/hermes-camera/learners":
+        from api.miss_maple_learners import LearnerSelectionError, learner_status
+        try:
+            return j(handler, learner_status(handler))
+        except LearnerSelectionError as exc:
+            return bad(handler, str(exc), status=exc.status)
     proxy_result = _handle_extension_sidecar_proxy(handler, parsed, "GET")
     if proxy_result is not False:
         return proxy_result
@@ -15266,6 +15296,13 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Update check failed, see server log for details", status=500)
         logger.info("update check completed")
         return j(handler, payload)
+
+    if parsed.path == "/api/extensions/hermes-camera/learners/select":
+        from api.miss_maple_learners import LearnerSelectionError, select_learner
+        try:
+            return j(handler, select_learner(handler, body.get("learner_id")))
+        except LearnerSelectionError as exc:
+            return bad(handler, str(exc), status=exc.status)
 
     if parsed.path == "/api/extensions/toggle":
         from api.extensions import ExtensionToggleError, set_extension_user_enabled
