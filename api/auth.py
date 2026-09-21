@@ -853,6 +853,26 @@ def session_bound_profile(cookie_value: str) -> str | None:
     return bound_profile or None
 
 
+def set_session_value(cookie_value: str, key: str, value: str) -> bool:
+    """Persist one allowlisted value on an authenticated WebUI session."""
+    if key != "learner_id" or not isinstance(value, str):
+        return False
+    token = _session_token_from_cookie_value(cookie_value)
+    if not token or not verify_session(cookie_value):
+        return False
+    with _SESSIONS_LOCK:
+        record = _sessions.get(token)
+        expiry = _session_expiry(record)
+        if expiry is None:
+            return False
+        if not isinstance(record, dict):
+            record = {"expiry": expiry}
+            _sessions[token] = record
+        record[key] = value
+        _save_sessions(_sessions)
+    return True
+
+
 def is_trusted_auth_enabled() -> bool:
     return _trusted_auth_header_configured()
 
