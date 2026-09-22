@@ -5736,9 +5736,13 @@ def _check_same_origin_browser_request(handler, *, require_provenance: bool = Fa
         if sec_fetch_site == "none":
             return True
         if sec_fetch_site == "same-origin":
-            return not require_provenance or _set_csrf_failure_reason(
-                handler, "origin_mismatch"
-            )
+            # Sec-Fetch-Site is a forbidden header: browsers set it
+            # truthfully and scripts cannot forge it, so "same-origin" is
+            # itself same-origin provenance — accept it even under
+            # require_provenance. Same-origin GET fetches carry no Origin
+            # header and clients may suppress Referer; rejecting them
+            # breaks legitimate browser clients (e.g. camera polling).
+            return True
         return _set_csrf_failure_reason(handler, "origin_mismatch")
     m = _re.match(r"^https?://([^/]+)", target)
     if not m:

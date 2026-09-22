@@ -590,8 +590,30 @@ def test_extension_sidecar_proxy_route_preserves_upstream_http_errors(monkeypatc
     assert handler.header("Set-Cookie") is None
 
 
-def test_extension_sidecar_proxy_get_rejects_sec_fetch_same_origin_without_origin(monkeypatch):
+def test_extension_sidecar_proxy_get_accepts_sec_fetch_same_origin_without_origin(monkeypatch):
+    # Sec-Fetch-Site is a forbidden header (set truthfully by the browser,
+    # unforgable by scripts), so "same-origin" is accepted as provenance even
+    # under require_provenance: same-origin GET fetches carry no Origin header
+    # and clients may suppress Referer.
     from api import routes
+
+    class FakeResponse:
+        def __init__(self):
+            self.status = 200
+            self.headers = {"Content-Type": "application/json"}
+
+        def read(self, *_args):
+            return b'{"ok":true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeOpener:
+        def open(self, request, timeout=10):
+            return FakeResponse()
 
     monkeypatch.setattr(
         "api.extensions.resolve_extension_sidecar_proxy_target",
@@ -601,6 +623,11 @@ def test_extension_sidecar_proxy_get_rejects_sec_fetch_same_origin_without_origi
             "proxy_path": "/api/extensions/templates/sidecar/",
             "upstream_url": "http://127.0.0.1:17787/v1/ping",
         },
+    )
+    monkeypatch.setattr(
+        routes,
+        "_extension_sidecar_proxy_same_origin_opener",
+        lambda allowed_origin: FakeOpener(),
     )
 
     handler = FakeHandler()
@@ -613,11 +640,9 @@ def test_extension_sidecar_proxy_get_rejects_sec_fetch_same_origin_without_origi
         handler,
         SimpleNamespace(path="/api/extensions/templates/sidecar/v1/ping", query=""),
     )
-    assert result is None
-    assert handler.status == 403
-    assert json.loads(handler.body.decode("utf-8")) == {
-        "error": "Cross-origin mismatch - check reverse proxy headers"
-    }
+    assert result is True
+    assert handler.status == 200
+    assert json.loads(handler.body.decode("utf-8")) == {"ok": True}
 
 
 def test_extension_sidecar_proxy_get_allows_top_level_navigation_provenance(monkeypatch):
