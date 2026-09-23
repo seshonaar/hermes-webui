@@ -7785,8 +7785,18 @@ function renderMd(raw){
   // false positives on currency like "$1,000 xuống ~$95" or "costs $5 and $10".
   // Aligns with smd's se() guard which also rejects $ followed by digits.
   s=s.replace(/\$([^\s$\d\n][^$\n]*?[^\s$\n]|[^\s\d])\$/g,(_,m)=>{if(m.includes(' | '))return '\$'+m+'\$';math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
-  // Digit-leading arithmetic is math, not currency. Keep plain $5 and $1,000 inert.
-  s=s.replace(/\$(\d[^$\n]*?(?:\s(?:[+\-*/=]|\\times|\\div)\s|\\frac)[^$\n]*?)\$/g,(_,m)=>{math_stash.push({type:'inline',src:m});return '\x00M'+(math_stash.length-1)+'\x00';});
+  // Digit-leading arithmetic is math, not currency. Accept a candidate when it
+  // holds a LaTeX command (\le, \ge, \times, \frac, ...) or an operator wedged
+  // between digit-ish tokens (2^1+1, 2+2=4, 3\times4, 2a+3b), and contains no
+  // real words — "between $50 and $100", "$5-$10 a month" stay inert.
+  s=s.replace(/\$(\d[^$\n]*?)\$/g,(_,m)=>{
+    if(m.includes(' | ')) return '\$'+m+'\$';
+    const wordy=/[a-zA-Z]{2,}/.test(m.replace(/\\[a-zA-Z]+/g,''));
+    const isMath=!wordy&&(/\\[a-zA-Z]+/.test(m)||/(?:[\d}]|[a-zA-Z])\s*(?:<=|>=|=>|[+\-*/=<>])\s*(?:\d|[a-zA-Z]|\\)/.test(m));
+    if(!isMath) return '\$'+m+'\$';
+    math_stash.push({type:'inline',src:m});
+    return '\x00M'+(math_stash.length-1)+'\x00';
+  });
   // A closed $...$ holding only a bare number (optional decimal, optional
   // ^ or _ exponent/subscript in braced or bare-digit form) is math too —
   // tutors write plain numbers this way ($550$, $2^1$). Unclosed currency
